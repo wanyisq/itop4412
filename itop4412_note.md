@@ -32,4 +32,7 @@ https://www.cnblogs.com/topeet/p/10839409.html
 ## 3. 文件系统无法新建文件夹
 在root=/dev/mmcblk1p2后面加上rw更改为```CONFIG_CMDLINE="root=/dev/mmcblk1p2 rw console=ttySAC2,115200 init=/linuxrc rootwait"```表示文件系统可读可写，然后编译uImage和system.img文件系统，更新系统镜像
 
+## 4.开发板进入linux系统后挂载tf卡
+使用```mkdir /mnt/udisk```命令在mnt目录下创建udisk目录
 
+使用```mount /dev/mmcblk0p1 /mnt/udisk```命令挂载tf卡到/mnt/udisk目录，mmcblk0p1根据系统情况选择
