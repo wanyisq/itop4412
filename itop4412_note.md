@@ -3,9 +3,11 @@ https://www.cnblogs.com/topeet/p/10839409.html
 # 1.使用```/home/w/workspace/itop4412/支持设备树的镜像文件```
 
 1. 使用4412默认的uboot更新支持设备树的uboot
+默认的uboot控制台显示itop-uboot,在此控制台使用```fastboot```命令更新支持设备树的boot。
+
 ```fastboot flash bootloader u-boot-iTOP-4412.bin```
 
-2. 进入支持设备树的uboot控制台，使用命令```fastboot 0```
+2. 进入支持设备树的uboot控制台，此时控制台显示uboot，使用命令```fastboot 0```
 
 3. 更新内核、设备树、文件系统使用一下命令
 ```fastboot flash kernel uImage```
