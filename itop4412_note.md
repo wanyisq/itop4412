@@ -1,4 +1,10 @@
+# 讯为资料修订：
+itop4412 scp精英版原理图错误
+1. led2引脚应更改为gpl2-0
+
+```
 https://www.cnblogs.com/topeet/p/10839409.html
+```
 
 # 1.使用```/home/w/workspace/itop4412/支持设备树的镜像文件```
 
