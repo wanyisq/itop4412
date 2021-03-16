@@ -3,7 +3,8 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
-
+#include <linux/cdev.h>
+#include <linux/device.h>
 #include <linux/miscdevice.h>
 #include <linux/fs.h>
 
@@ -13,15 +14,115 @@
 #include <linux/gpio_keys.h>
 #include <linux/of_irq.h>
 
+#include <linux/types.h>
+#include <linux/kernel.h>
+#include <linux/ide.h>
+#include <linux/errno.h>
+#include <linux/gpio.h>
+#include <linux/of_address.h>
+#include <linux/timer.h>
+#include <linux/semaphore.h>
+#include <asm/mach/map.h>
+#include <asm/io.h>
+
 #define DRIVER_NAME "user_key"
-
-int gpio_irq_num = 0;
-
-static irqreturn_t eint_interrupt(int irq, void *dev_id) 
+#define KEY_NUM	1
+#define KEY0VALUE		0x01
+#define INVAKEY			0xff
+struct irq_keydest
 {
-	printk("HOME KEY HIGH TO LOW!\n");
-	
-	return IRQ_HANDLED;
+	int gpio;
+	int irqnum;
+	unsigned char value;
+	char name[10];
+	irqreturn_t (*handler)(int, void *);
+};
+
+struct exynosirq_dev
+{
+	int major;
+	int minor;
+	dev_t devid;
+	struct cdev cdev;
+	struct class *class;
+	struct device *device;
+	struct device_node *node;
+	atomic_t keyvalue;
+	atomic_t releasekey;
+	struct timer_list timer;
+	struct irq_keydest irq_keydest[KEY_NUM];
+	unsigned char curkeynum;
+};
+struct exynosirq_dev exynosirq;
+
+static ssize_t exynosirq_open(struct inode *node, struct file *filp)
+{
+	filp->private_data = &exynosirq;
+	return 0;
+}
+
+static ssize_t exynosirq_read(struct file *filp, char __user *buf, size_t cnt, loff_t *offt)
+{
+	int ret = 0;
+	unsigned char keyvalue = 0;
+	unsigned char releasekey = 0;
+	struct exynosirq_dev *dev = (struct exynosirq_dev *)filp->private_data;
+
+	keyvalue = atomic_read(&dev->keyvalue);
+	releasekey = atomic_read(&dev->releasekey);
+
+	if(releasekey){
+		if(keyvalue & 0x80){
+			keyvalue &= 0x80;
+			ret = copy_to_user(buf, &keyvalue, sizeof(keyvalue));
+		}else{
+			goto data_error;
+		}
+		atomic_set(&dev->releasekey, 0);
+	}else{
+		goto data_error;
+	}
+	return 0;
+
+data_error:
+	return -EINVAL;
+
+}
+static struct file_operations exynosirq_fops = {
+	.owner = THIS_MODULE,
+	.open = exynosirq_open,
+	.read = exynosirq_read,
+};
+
+static irqreturn_t key0_handler(int irq, void *dev_id)
+{
+	struct exynosirq_dev *dev = (struct exynosirq_dev *)dev_id;
+
+	dev->curkeynum = 0;
+	dev->timer.data = (volatile long)dev_id;
+	mod_timer(&dev->timer, jiffies + msecs_to_jiffies(10));
+	printk("%s, %x\r\n", __FUNCTION__, dev_id);
+	return IRQ_RETVAL(IRQ_HANDLED);
+}
+
+void timer_function(unsigned long arg)
+{
+	unsigned char value;
+	unsigned char num;
+	struct irq_keydest *keydest;
+	struct exynosirq_dev *dev = (struct exynosirq_dev *)arg;
+
+	num  = dev->curkeynum;
+	keydest = &dev->irq_keydest[num];
+	value  = gpio_get_value(keydest->gpio);
+	if(value == 0){
+		atomic_set(&dev->keyvalue, keydest->value);
+	}else{
+		atomic_set(&dev->keyvalue, 0x80 | keydest->value);
+		atomic_set(&dev->releasekey, 1);
+	}
+
+	printk("%s\r", __FUNCTION__);
 }
 
 static int inter_probe(struct platform_device * pdev)
@@ -30,20 +131,60 @@ static int inter_probe(struct platform_device * pdev)
 	int ret;
 
 	printk("inter_probe\r");
-	gpio_irq_num = irq_of_parse_and_map(node, 0);
-	printk("irq num is %d\r", gpio_irq_num);
-	
-	ret = request_irq(gpio_irq_num, eint_interrupt,IRQ_TYPE_EDGE_FALLING, "user_init_key", pdev);
-	if (ret < 0) {
-			printk("Request IRQ %d failed, %d\n", gpio_irq_num,ret);
-			return -1;
+
+	if(exynosirq.major){
+		exynosirq.devid = MKDEV(exynosirq.major, 0);
+		register_chrdev_region(exynosirq.devid, KEY_NUM, DRIVER_NAME);
+	}else{
+		alloc_chrdev_region(&exynosirq.devid, 0, KEY_NUM, DRIVER_NAME);
+		exynosirq.major = MAJOR(exynosirq.devid);
+		exynosirq.minor = MINOR(exynosirq.devid);
 	}
+	cdev_init(&exynosirq.cdev, &exynosirq_fops);
+	cdev_add(&exynosirq.cdev, exynosirq.devid, KEY_NUM);
+	exynosirq.class = class_create(THIS_MODULE, DRIVER_NAME);
+	if(IS_ERR(exynosirq.class)){
+		return PTR_ERR(exynosirq.class);
+	}
+	exynosirq.device = device_create(exynosirq.class, NULL, exynosirq.devid, NULL, DRIVER_NAME);
+	if(IS_ERR(exynosirq.device)){
+		return PTR_ERR(exynosirq.device);
+	}
+
+	atomic_set(&exynosirq.keyvalue, INVAKEY);
+	atomic_set(&exynosirq.releasekey, 0);
+
+	exynosirq.irq_keydest[0].irqnum = irq_of_parse_and_map(node, 0);
+	printk("irq num is %d\r", exynosirq.irq_keydest[0].irqnum);
+	
+	ret = request_irq(exynosirq.irq_keydest[0].irqnum, key0_handler, IRQ_TYPE_EDGE_FALLING, "user_init_key", &exynosirq);
+	if (ret < 0) {
+		printk("Request IRQ %d failed, %d\n", exynosirq.irq_keydest[0].irqnum,ret);
+		return -1;
+	}
+
+	exynosirq.timer.function = timer_function;
+	init_timer(&exynosirq.timer);
+
+	printk("%s, %x\r\n", __FUNCTION__, timer_function);
+	printk("inter_probe end\r");
+	
     return 0;
 }
 
 static int inter_remove(struct platform_device * pdev)
 {
-	free_irq(gpio_irq_num, pdev);
+	unsigned i = 0;
+	del_timer_sync(&exynosirq.timer);
+
+	for(i = 0; i < KEY_NUM; i++){
+		free_irq(exynosirq.irq_keydest[i].irqnum, &exynosirq);
+	}
+
+	cdev_del(&exynosirq.cdev);
+	unregister_chrdev_region(exynosirq.devid, KEY_NUM);
+	device_destroy(exynosirq.class, exynosirq.devid);
+	class_destroy(exynosirq.class);
 	
 	printk(KERN_ALERT "Goodbye, curel world, this is remove\n");
 	
@@ -61,9 +202,9 @@ static struct platform_driver inter_driver = {
 	.probe 	= inter_probe,
 	.remove = inter_remove,
 	.driver = {
-		.name = DRIVER_NAME,
+		.name = DRIVER_NAME, //此属性用于传统的驱动与设备匹配
 		.owner = THIS_MODULE,
-		.of_match_table = of_inter_dt_match,
+		.of_match_table = of_inter_dt_match, //此属性用于设备树下驱动和设备的匹配
 		},
 };
 
