@@ -1,3 +1,4 @@
+#include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -15,7 +16,6 @@
 #include <linux/of_irq.h>
 
 #include <linux/types.h>
-#include <linux/kernel.h>
 #include <linux/ide.h>
 #include <linux/errno.h>
 #include <linux/gpio.h>
@@ -98,9 +98,13 @@ static struct file_operations exynosirq_fops = {
 
 static void test_work_function(struct work_struct *work)
 {
-	exynosirq.curkeynum = 0;
-	exynosirq.timer.data = (volatile long)&exynosirq;
-	mod_timer(&exynosirq.timer, jiffies + msecs_to_jiffies(10));
+	struct exynosirq_dev *dev;
+
+	dev = container_of(work, struct exynosirq_dev, work);
+	printk("work dev addr %x\r\n", dev);
+	dev->curkeynum = 0;
+	dev->timer.data = (volatile long)dev;
+	mod_timer(&dev->timer, jiffies + msecs_to_jiffies(10));
 	printk("%s\r\n", __FUNCTION__);
 }
 
@@ -177,7 +181,7 @@ static int inter_probe(struct platform_device * pdev)
 	init_timer(&exynosirq.timer);
 
 	printk("%s, %x\r\n", __FUNCTION__, timer_function);
-	printk("inter_probe end\r");
+	printk("inter_probe end exynosirq addr %x\r", &exynosirq);
 	
     return 0;
 }
